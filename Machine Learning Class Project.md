@@ -1,0 +1,195 @@
+# Machine Learning Class Project
+
+## Executive Summary
+This report describes the process of building a model to predict whether a particular weight lifting exercise was performed correctly based on data collected from instruments worn by the weight lifter.  The data for this project came from this website: http://groupware.les.inf.puc-rio.br/har and consisted of 19,622 observations of 160 variables each.  After exploring a number of options I got my best results using a bagging process on classification trees of 18 predictors.  To facilitate accurate estimation of the out-of-sample-error rate for the final model I initially divided the data into two parts, a training dataset and a testing dataset.  All model making decisions were based on results from the training dataset.  The final model was then run on the testing dataset to generate the estimated error of the model when run on independent data.  The model's accuracy on this test set was .9975.  The model was then used to correctly predict the answers for all 20 data points on the project quiz.
+
+## Data Processing
+
+The data was loaded and cleaned up with the followiong function.  To facilitate model building all factor variables were converted to numeric quantities and columns with no data were removed.  Finally blank entries (NAs) were converted to 0s. 
+
+
+```r
+loadAndCleanData <- function(fileName) {
+    
+    ## load the file into data
+    data <- read.csv(fileName, header = T, quote = "\"", na.strings = "#DIV/0!")
+    
+    ## clean up factor variables
+    for (i in c(19, 22, 25, 77, 80, 83)) data[, i] <- as.integer(levels(data[, 
+        i])[data[, i]])
+    for (i in c(18, 21, 24, 27:36, 50:59, 75, 76, 78, 79, 81, 82, 93, 94, 96, 
+        97, 99, 100, 103:112, 131, 132, 134, 135, 137, 138, 141:150)) {
+        data[, i] <- as.numeric(levels(data[, i])[data[, i]])
+    }
+    
+    ## remove cols with only NAs
+    for (i in c(130, 127, 92, 89, 17, 14)) data <- data[, -i]
+    
+    ## remove non feature columns
+    data <- data[, -(1:7)]
+    
+    ## convert NAs to zeros
+    NAs <- is.na(data)
+    data[NAs] <- 0
+    
+    ## return the cleaned up data
+    data
+}
+```
+
+
+Here is the code I used to load in my data and create the training and test data sets:
+
+
+```r
+
+library(caret)
+```
+
+```
+## Loading required package: lattice
+## Loading required package: ggplot2
+```
+
+```r
+## load in the training data
+data <- loadAndCleanData("pml-training.csv")
+
+## create training and test sets
+set.seed(1234)
+inTrain <- createDataPartition(y = data$classe, p = 0.8, list = F)
+test <- data[-inTrain, ]
+train <- data[inTrain, ]
+```
+
+
+## Model Development
+
+The first model I tried to build was a decission tree.  The code executed in <30 secs on my laptop but generated a model with an estimated error rate of 33%.  I also tried pruning that tree, but the results got worse.
+
+
+```r
+
+## lets try a decision tree
+library(tree)
+tmodel <- tree(classe ~ ., train)  ## takes around 25 secs!
+## summary(tmodel) ##misclassification error rate of .33!
+
+## now lets try pruning
+cvmodel <- cv.tree(tmodel, FUN = prune.misclass)  ## 50 secs
+## summary(cvmodel) ## best results were with the full 18 node tree
+```
+
+
+Next, I tried building a random forest model.  This code ran all night and never finished.  The data space is too big for my poor old machine.  Guess we'll have to be smarter.  
+
+
+```r
+library(randomForest)
+```
+
+```
+## randomForest 4.6-7
+## Type rfNews() to see new features/changes/bug fixes.
+```
+
+```r
+
+## first try ran all night and never finished.  Going to have to be smarter!
+## rf <- train(classe~., data=train, method='rf', prox=T)
+```
+
+
+Since runtime was an issue, I tried restricting the number of trees built. Building just 3 trees took only 3 seconds and generated a model with an error of 10.24%!  Jumping to 10 trees reduced the error to 5.36% and ran in about 13 seconds.  100 trees generated an error of .51% and ran in 70 seconds.  Using 500 trees improved the error only marginally, so I decided to stick with 100 trees.
+
+
+```r
+library(randomForest)
+
+## how many trees can I afford to run in reasonable time?  (ans 100)
+bag3.tmodel <- randomForest(classe ~ ., data = train, ntree = 3)  # ~3 secs.  error of 10.24%
+bag10.tmodel <- randomForest(classe ~ ., data = train, ntree = 10)  # ~13 secs. error of 5.36%
+bag100.tmodel <- randomForest(classe ~ ., data = train, ntree = 100)  # ~70 secs. error of .51%
+bag500.tmodel <- randomForest(classe ~ ., data = train, ntree = 500)  # ~220 secs. error rate of 0.47%
+```
+
+
+Next I decided to explored bagging, where the number of variables used is restriced to less than the total size of the dataset.  
+As the tree built in the first model had only 18 terminal nodes, I decided to search around 18 and found that a local minimum with trees set to that size. 
+
+
+
+```r
+library(randomForest)
+
+## what is the right number of preditors to use?  (ans 18)
+bag100.13.tmodel <- randomForest(classe ~ ., data = train, mtry = 13, ntree = 100)  # error of .58%
+bag100.15.tmodel <- randomForest(classe ~ ., data = train, mtry = 15, ntree = 100)  # error of .57%
+bag100.16.tmodel <- randomForest(classe ~ ., data = train, mtry = 16, ntree = 100)  # error of .59%
+bag100.17.tmodel <- randomForest(classe ~ ., data = train, mtry = 17, ntree = 100)  # error of .51%
+bag100.18.tmodel <- randomForest(classe ~ ., data = train, mtry = 18, ntree = 100)  # error of .46%
+bag100.19.tmodel <- randomForest(classe ~ ., data = train, mtry = 19, ntree = 100)  # error of .53%
+bag100.20.tmodel <- randomForest(classe ~ ., data = train, mtry = 20, ntree = 100)  # error of .50%
+```
+
+
+With my parameters dialed in, I decided to bump the number of trees built in the bagging process to 1000 for a final model.  This model dropped the estimated error down to .41% and took a total of 331 seconds to run on my machine.  Nice!
+
+
+```r
+library(randomForest)
+
+set.seed(1)
+final.model <- randomForest(classe ~ ., data = train, mtry = 18, ntree = 1000)  # error of .41% on training data
+```
+
+
+To calculate the expected error rate on un-trained samples, I went back  to the test data set asside at the beginning of this exercise.  The predictions from the final model get a measured accuracy of .9975!  Of course this is still only an estimate, but it sure looks good!
+
+
+```r
+
+## and calculate error rate on the test set
+pred <- predict(final.model, newdata = test)  #Accuracy of .9975!
+confusionMatrix(pred, test$classe)
+```
+
+```
+## Confusion Matrix and Statistics
+## 
+##           Reference
+## Prediction    A    B    C    D    E
+##          A 1116    1    0    0    0
+##          B    0  757    5    0    0
+##          C    0    1  679    3    0
+##          D    0    0    0  640    0
+##          E    0    0    0    0  721
+## 
+## Overall Statistics
+##                                         
+##                Accuracy : 0.997         
+##                  95% CI : (0.995, 0.999)
+##     No Information Rate : 0.284         
+##     P-Value [Acc > NIR] : <2e-16        
+##                                         
+##                   Kappa : 0.997         
+##  Mcnemar's Test P-Value : NA            
+## 
+## Statistics by Class:
+## 
+##                      Class: A Class: B Class: C Class: D Class: E
+## Sensitivity             1.000    0.997    0.993    0.995    1.000
+## Specificity             1.000    0.998    0.999    1.000    1.000
+## Pos Pred Value          0.999    0.993    0.994    1.000    1.000
+## Neg Pred Value          1.000    0.999    0.998    0.999    1.000
+## Prevalence              0.284    0.193    0.174    0.164    0.184
+## Detection Rate          0.284    0.193    0.173    0.163    0.184
+## Detection Prevalence    0.285    0.194    0.174    0.163    0.184
+## Balanced Accuracy       1.000    0.998    0.996    0.998    1.000
+```
+
+
+## Conclusions
+
+Using bagging of classification trees with a bit of model tuning and some data cleanup have yeilded a surprisingly accurate model for this problem.
+
